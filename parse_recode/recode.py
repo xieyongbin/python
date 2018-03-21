@@ -1,6 +1,8 @@
 """ 7KW交流桩交易记录解析
     V1.1：
         修复V1.0使用time.mktime()转成了UTC时间，而非本地时间
+    V1.2:
+        支持5个时间段的交易记录，不再支持4个时间段
 """
 
 import os
@@ -9,11 +11,14 @@ from enum import Enum
 
 #声明
 prompt = """
-7KW交流桩交易记录程序V1.1
-目前支持最多4个时间段
+7KW交流桩交易记录程序V1.2
+支持最多5个时间段，交易记录只有4个时间段的请使用V1.1，V1.2不再支持
 """
 #生成的文件名
 new_file_name = 'recode_list'
+
+#交易记录文件预留的时间段个数
+recode_time_seq_num = 5
 
 class Start_Mode(Enum):
     """ 定义一个枚举,启动方式 """
@@ -143,18 +148,16 @@ def parse_stop_reason(stop, recode):
     else:
         recode['stop_reason'] = '未定义(%s)' % stop
 
-def parse_start_time_seq(time_seq, recode):
-    """ 解析启动开始时间段 """
-    if time_seq == Start_Time_Seq.timequan_jian.value:
-        recode['start_quatum'] = '尖'
-    elif time_seq == Start_Time_Seq.timequan_feng.value:
-        recode['start_quatum'] = '峰'
-    elif time_seq == Start_Time_Seq.timequan_ping.value:
-        recode['start_quatum'] = '平'
-    elif time_seq == Start_Time_Seq.timequan_gu.value:
-        recode['start_quatum'] = '谷'
+def parse_start_mode(mode, recode):
+    """ 解析启动方式 """
+    if mode == Start_Mode.mode_start_device.value:
+        recode['start_method'] = '充电系统启动'
+    elif mode == Start_Mode.mode_start_platform.value:
+        recode['start_method'] = '平台启动'
+    elif mode == Start_Mode.mode_start_other.value:
+        recode['start_method'] = '其他方式启动'
     else:
-        recode['start_quatum'] = '未定义(%s)' % time_seq
+        recode['start_method'] = '未定义(%s)' % mode
 
 def parse_err_reason(err_reason, recode):
     """ 充电失败原因 """
@@ -189,7 +192,7 @@ def parse_one_recode(recode, num):
         'time_seq':[],          #时间段，time_seg_info_dict
         'start_fail': None,     #电失败原因，1字节
         'stop_reason': None,    #具体停止原因，1字节
-        'start_quatum': None,   #开始充电在那个时间段，1字节
+        'start_method': None,   #启动方式，1字节
         'charge_time': 0,       #充电时间 分辨率:1分钟，2字节
         'res1': 0,              #预留1,4字节
         'res2': 0               #预留2,4字节
@@ -234,7 +237,7 @@ def parse_one_recode(recode, num):
     if context[51] == Bill_Status.recode_settlement.value:
         charge_recode_dict['bill_status'] = '已结算(%d)' % context[51]
     elif context[51] == Bill_Status.recode_unsettlement.value:
-        charge_recode_dict['bill_status'] = '为结算(%d)' % context[51]
+        charge_recode_dict['bill_status'] = '未结算(%d)' % context[51]
     else:
         charge_recode_dict['bill_status'] = '未定义(%d)' % context[51]
     context_str += '结算标志: ' + charge_recode_dict['bill_status'] + '\n'
@@ -276,71 +279,78 @@ def parse_one_recode(recode, num):
     charge_recode_dict['time_seq_num'] = '%s' % context[index+20]
     context_str += '时间段个数: '  + charge_recode_dict['time_seq_num'] + '\n'
 
-    #时间段
-    if context[index+20] > 4:  #目前只支持最多4个时间段
-        time_seq = 4
-    else :
-        time_seq = context[index+20]
+    #时间段个数
+    time_seq = context[index+20]
+    #print("total %s time seq" % time_seq)
+    if time_seq > recode_time_seq_num:
+        time_seq = recode_time_seq_num #目前只支持最多recode_time_seq_num个时间段
     for i in range(time_seq):
-        charge_recode_dict['time_seq'].append(time_seg_info_dict)
-        context_str += '时间段' + str(i+1) + ': ' + '\n'
+        try:
+            charge_recode_dict['time_seq'].append(time_seg_info_dict)
+            context_str += '时间段' + str(i+1) + ': ' + '\n'
 
-        #1、时间段的开始时间
-        start_time = get_int32u_le(context[index+21+28*i:index+25+28*i])
-        charge_recode_dict['time_seq'][i]['start_timestamp'] = '0x%08X' % start_time
-        #将时间戳生成 ‘年-月-日 时：分：秒’格式
-        human_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time) )
-        context_str += '\t开始时间: ' + human_time + '(%d)' %(start_time) + '\n'
+            #1、时间段的开始时间
+            start_time = get_int32u_le(context[index+21+28*i:index+25+28*i])
+            charge_recode_dict['time_seq'][i]['start_timestamp'] = '0x%08X' % start_time
+            #将时间戳生成 ‘年-月-日 时：分：秒’格式
+            human_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time) )
+            context_str += '\t开始时间: ' + human_time + '(%d)' %(start_time) + '\n'
 
-        #2、时间段的结束时间
-        end_time = get_int32u_le(context[index+25+28*i:index+29+28*i])
-        charge_recode_dict['time_seq'][i]['end_timestamp'] = '0x%08X' % end_time
-        #将时间戳生成 ‘年-月-日 时：分：秒’格式
-        human_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end_time) )
-        context_str += '\t结束时间: ' + human_time + '(%d)' %(end_time) + '\n'
+            #2、时间段的结束时间
+            end_time = get_int32u_le(context[index+25+28*i:index+29+28*i])
+            charge_recode_dict['time_seq'][i]['end_timestamp'] = '0x%08X' % end_time
+            #将时间戳生成 ‘年-月-日 时：分：秒’格式
+            human_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end_time) )
+            context_str += '\t结束时间: ' + human_time + '(%d)' %(end_time) + '\n'
 
-        #3、时间段的充电电量
-        power = get_int32u_le(context[index+29+28*i:index+33+28*i]) *  0.01
-        charge_recode_dict['time_seq'][i]['power'] = '%s' %(power)
-        context_str += '\t电量: ' + charge_recode_dict['time_seq'][i]['power'] + '(KWh)\n'
+            #3、时间段的充电电量
+            power = get_int32u_le(context[index+29+28*i:index+33+28*i]) *  0.01
+            charge_recode_dict['time_seq'][i]['power'] = '%s' %(power)
+            context_str += '\t电量: ' + charge_recode_dict['time_seq'][i]['power'] + '(KWh)\n'
 
-        #4、时间段的服务费单价
-        price = get_int32u_le(context[index+33+28*i:index+37+28*i]) *  0.0001
-        charge_recode_dict['time_seq'][i]['service_price'] = '%s' %(price)
-        context_str += '\t服务费单价: ' + charge_recode_dict['time_seq'][i]['service_price'] + '(元)\n'
+            #4、时间段的服务费单价
+            price = get_int32u_le(context[index+33+28*i:index+37+28*i]) *  0.0001
+            charge_recode_dict['time_seq'][i]['service_price'] = '%s' %(price)
+            context_str += '\t服务费单价: ' + charge_recode_dict['time_seq'][i]['service_price'] + '(元)\n'
 
-        #5、时间段的单价
-        price = get_int32u_le(context[index+37+28*i:index+41+28*i]) *  0.0001
-        charge_recode_dict['time_seq'][i]['price'] = '%s' %(price)
-        context_str += '\t单价: ' + charge_recode_dict['time_seq'][i]['price'] + '(元)\n'
+            #5、时间段的单价
+            price = get_int32u_le(context[index+37+28*i:index+41+28*i]) *  0.0001
+            charge_recode_dict['time_seq'][i]['price'] = '%s' %(price)
+            context_str += '\t单价: ' + charge_recode_dict['time_seq'][i]['price'] + '(元)\n'
 
-        #6、时间段的服务费金额
-        price = get_int32u_le(context[index+41+28*i:index+45+28*i]) *  0.01
-        charge_recode_dict['time_seq'][i]['service'] = '%s' %(price)
-        context_str += '\t服务费金额: ' + charge_recode_dict['time_seq'][i]['service'] + '(元)\n'
+            #6、时间段的服务费金额
+            price = get_int32u_le(context[index+41+28*i:index+45+28*i]) *  0.01
+            charge_recode_dict['time_seq'][i]['service'] = '%s' %(price)
+            context_str += '\t服务费金额: ' + charge_recode_dict['time_seq'][i]['service'] + '(元)\n'
 
-        #7、时间段的充电金额，不含服务费
-        #print(context[index+44+28*i:index+48+28*i])
-        price = get_int32u_le(context[index+45+28*i:index+49+28*i]) *  0.01
-        charge_recode_dict['time_seq'][i]['momey'] = '%s' %(price)
-        context_str += '\t充电金额: ' + charge_recode_dict['time_seq'][i]['momey'] + '(元)\n'
+            #7、时间段的充电金额，不含服务费
+            #print(context[index+44+28*i:index+48+28*i])
+            price = get_int32u_le(context[index+45+28*i:index+49+28*i]) *  0.01
+            charge_recode_dict['time_seq'][i]['momey'] = '%s' %(price)
+            context_str += '\t充电金额: ' + charge_recode_dict['time_seq'][i]['momey'] + '(元)\n'
+        except IndexError:
+            print("时间段个数错误(%s)" % time_seq)
+            return None
+    try:
+        i = recode_time_seq_num - 1  #目前交易记录里预留了recode_time_seq_num个时间段
+        #8、充电失败原因 index+21+28*4
+        parse_err_reason(context[index+49+28*i], charge_recode_dict)
+        context_str += '启动失败原因: ' + charge_recode_dict['start_fail'] + '\n'
 
-    i = 3  #目前交易记录里预留了4个时间段
-    #8、充电失败原因 index+21+28*4
-    parse_err_reason(context[index+49+28*i], charge_recode_dict)
-    context_str += '启动失败原因: ' + charge_recode_dict['start_fail'] + '\n'
+        #9、具体停止原因
+        parse_stop_reason(context[index+50+28*i], charge_recode_dict)
+        context_str += '停止原因: ' + charge_recode_dict['stop_reason'] + '\n'
 
-    #9、具体停止原因
-    parse_stop_reason(context[index+50+28*i], charge_recode_dict)
-    context_str += '停止原因: ' + charge_recode_dict['stop_reason'] + '\n'
+        #10、启动方式
+        parse_start_mode(context[index+51+28*i], charge_recode_dict)
+        context_str += '启动方式: ' + charge_recode_dict['start_method'] + '\n'
 
-    #10、开始充电在哪个时间段
-    parse_start_time_seq(context[index+51+28*i], charge_recode_dict)
-    context_str += '开始充电时间段: ' + charge_recode_dict['start_quatum'] + '\n'
-
-    #11、充电时长
-    charge_recode_dict['charge_time'] = '%s' % get_int16u_le(context[index+52+28*i:index+54+28*i])
-    context_str += '充电时长: ' + charge_recode_dict['charge_time'] + '(分钟)\n'
+        #11、充电时长
+        charge_recode_dict['charge_time'] = '%s' % get_int16u_le(context[index+52+28*i:index+54+28*i])
+        context_str += '充电时长: ' + charge_recode_dict['charge_time'] + '(分钟)\n'
+    except IndexError:
+        print("时间段后至少需要5字节(%s)")
+        return None
 
     context_str += '\n'
     return context_str
