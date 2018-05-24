@@ -2,12 +2,14 @@
     对7KW交流充电桩log中的SM4解密，目前仅对发送的帧进行解密
     V1.0：
         1、修复原始数据丢失第24个字节的问题
+	V1.1:
+		1、修改对GPRS发送帧的正则表达式规则
 """
 
 import re
 import sm4
 
-ver = 'V1.0'
+ver = 'V1.1'
 
 #sm4密钥
 key_data = [0x01,0x23,0x45,0x67,0x89,0xab,0xcd,0xef,0xfe,0xdc,0xba,0x98,0x76,0x54,0x32,0x10]
@@ -27,7 +29,7 @@ def parse_log(file_name=log_name):
     sm4_d = sm4.Sm4()                     #构建一个Sm4对象
     sm4_d.sm4_setkey(key_data, sm4.SM4_DECRYPT)    #设置密钥跟加解码模式
     #对列表的每个表项进行正则表达式搜索
-    regex = re.compile(r'.+GPRS Send ID=(0x\d{4}):\[([\dA-Fa-f]+)\].*', re.DOTALL)
+    regex = re.compile(r'.+Send ID\s*=\s*(0x\d{4}):\[([\dA-Fa-f]+)\].*', re.DOTALL)
     for i in range(len(context)):         #遍历所有行
         result = regex.search(context[i]) #搜索每一行
         if not result:
